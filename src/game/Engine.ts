@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CarSpec, TrackSpec } from './data';
 import { audio } from './audio';
 
@@ -66,10 +68,10 @@ function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
   const bodyColor = spec.color;
   const accentColor = spec.accentColor;
 
-  const paint = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.7, roughness: 0.25 });
-  const darkPaint = new THREE.MeshStandardMaterial({ color: accentColor, metalness: 0.5, roughness: 0.4 });
-  const glass = new THREE.MeshStandardMaterial({ color: 0x111820, metalness: 0.9, roughness: 0.1, transparent: true, opacity: 0.75 });
-  const chrome = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.95, roughness: 0.1 });
+  const paint = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.35, roughness: 0.3, envMapIntensity: 1.4 });
+  const darkPaint = new THREE.MeshStandardMaterial({ color: accentColor, metalness: 0.3, roughness: 0.45, envMapIntensity: 1.1 });
+  const glass = new THREE.MeshStandardMaterial({ color: 0x35506a, metalness: 0.6, roughness: 0.12, transparent: true, opacity: 0.6, envMapIntensity: 1.6 });
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xdadada, metalness: 0.9, roughness: 0.15, envMapIntensity: 1.6 });
   const rubber = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
   const lightMat = new THREE.MeshStandardMaterial({ color: 0xffffee, emissive: 0xffffcc, emissiveIntensity: 1.2 });
   const tailMat = new THREE.MeshStandardMaterial({ color: 0xff2020, emissive: 0xff0000, emissiveIntensity: 0.8 });
@@ -257,6 +259,56 @@ interface TrackData {
   scenery: THREE.Object3D[];
 }
 
+// ---------- Brighter per-environment palettes ----------
+const ENV_GROUND: Record<string, number> = {
+  city: 0x74787e, highway: 0x4f7a3f, mountain: 0x4d7340, desert: 0xd9b57e,
+  coastal: 0x6a9a8f, industrial: 0x5c5c62, tunnel: 0x2e2e33, night: 0x181d2b,
+  rain: 0x525c66, airport: 0x7a7e84, forest: 0x3f7034, circuit: 0x6f6f74,
+};
+const ENV_ROAD: Record<string, number> = {
+  city: 0x3d3d44, highway: 0x3b3b41, mountain: 0x3e3e44, desert: 0xa07f52,
+  coastal: 0x3f4046, industrial: 0x43434a, tunnel: 0x2c2c32, night: 0x22222b,
+  rain: 0x36363e, airport: 0x48484e, forest: 0x3c3c42, circuit: 0x3a3a40,
+};
+
+// ---------- Procedural building facade textures (windows, day & night) ----------
+const buildingTexCache = new Map<string, THREE.CanvasTexture>();
+const BUILDING_BASES_DAY = ['#b9b3a7', '#9fabb8', '#c6b69b', '#8d99a6', '#b4a696', '#98a49b'];
+const BUILDING_BASES_NIGHT = ['#2b3242', '#232a3a', '#2f343e'];
+function pickBuildingTexture(night: boolean): THREE.CanvasTexture {
+  const bases = night ? BUILDING_BASES_NIGHT : BUILDING_BASES_DAY;
+  const base = bases[Math.floor(Math.random() * bases.length)];
+  const key = `${night ? 'n' : 'd'}:${base}:${Math.floor(Math.random() * 3)}`;
+  const cached = buildingTexCache.get(key);
+  if (cached) return cached;
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 256;
+  const g = c.getContext('2d')!;
+  g.fillStyle = base;
+  g.fillRect(0, 0, 128, 256);
+  const cols = 6, rows = 16;
+  const wx = 128 / cols, wy = 256 / rows;
+  for (let x = 0; x < cols; x++) {
+    for (let y = 0; y < rows; y++) {
+      const lit = night && Math.random() < 0.38;
+      g.fillStyle = lit ? '#ffd784' : night ? '#11161f' : '#2c3644';
+      g.fillRect(x * wx + 3.5, y * wy + 4, wx - 7, wy - 8);
+    }
+  }
+  // subtle shading gradient for depth
+  const grad = g.createLinearGradient(0, 0, 128, 0);
+  grad.addColorStop(0, 'rgba(0,0,0,0.18)');
+  grad.addColorStop(0.5, 'rgba(255,255,255,0.05)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.12)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 256);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  buildingTexCache.set(key, tex);
+  return tex;
+}
+
 function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
   const group = new THREE.Group();
   scene.add(group);
@@ -298,7 +350,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
   roadGeo.setIndex(indices);
   roadGeo.computeVertexNormals();
 
-  const roadMat = new THREE.MeshStandardMaterial({ color: spec.roadColor, roughness: 0.9, metalness: 0.05 });
+  const roadMat = new THREE.MeshStandardMaterial({ color: ENV_ROAD[spec.environment] ?? spec.roadColor, roughness: 0.95, metalness: 0.0 });
   const road = new THREE.Mesh(roadGeo, roadMat);
   road.receiveShadow = true;
   group.add(road);
@@ -321,7 +373,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
   centerGeo.setAttribute('position', new THREE.Float32BufferAttribute(cverts, 3));
   centerGeo.setIndex(cinds);
   centerGeo.computeVertexNormals();
-  const centerMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x333333 });
+  const centerMat = new THREE.MeshStandardMaterial({ color: 0xfffbe8, emissive: 0x8a8a7a, emissiveIntensity: 0.9 });
   const centerMesh = new THREE.Mesh(centerGeo, centerMat);
   group.add(centerMesh);
 
@@ -349,7 +401,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
     eg.setAttribute('position', new THREE.Float32BufferAttribute(edgeVerts, 3));
     eg.setIndex(edgeInds);
     eg.computeVertexNormals();
-    const edgeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: spec.environment === 'night' ? 0x555577 : 0x222222 });
+    const edgeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: spec.environment === 'night' ? 0x667799 : 0x606060 });
     group.add(new THREE.Mesh(eg, edgeMat));
   }
 
@@ -357,7 +409,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
   const groundSize = 3000;
   const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize, 1, 1);
   groundGeo.rotateX(-Math.PI / 2);
-  const groundMat = new THREE.MeshStandardMaterial({ color: spec.groundColor, roughness: 1 });
+  const groundMat = new THREE.MeshStandardMaterial({ color: ENV_GROUND[spec.environment] ?? spec.groundColor, roughness: 1 });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.receiveShadow = true;
   ground.position.y = -0.05;
@@ -367,8 +419,10 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
   const scenery: THREE.Object3D[] = [];
   const barrierData: { pos: THREE.Vector3; normal: THREE.Vector3; width: number }[] = [];
 
-  // Barriers along edges
-  const barrierCount = Math.floor(totalLength / 15);
+  // Guardrails along edges — continuous red/white rails (merged = fast)
+  const railGeosWhite: THREE.BufferGeometry[] = [];
+  const railGeosRed: THREE.BufferGeometry[] = [];
+  const barrierCount = Math.floor(totalLength / 3.4);
   for (let i = 0; i < barrierCount; i++) {
     const t = i / barrierCount;
     const p = curve.getPointAt(t);
@@ -376,20 +430,21 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
     const right = new THREE.Vector3().crossVectors(tan, up).normalize();
     if (right.lengthSq() < 0.01) right.set(1, 0, 0);
     for (const side of [-1, 1]) {
-      const bp = p.clone().add(right.clone().multiplyScalar(side * (width / 2 + 1.2)));
-      bp.y += 0.4;
-      const barrier = new THREE.Mesh(
-        new THREE.BoxGeometry(3, 0.8, 0.4),
-        new THREE.MeshStandardMaterial({ color: spec.environment === 'night' ? 0x333355 : 0x666666, roughness: 0.8 })
-      );
-      barrier.position.copy(bp);
-      barrier.rotation.y = Math.atan2(tan.x, tan.z);
-      barrier.castShadow = true;
-      group.add(barrier);
-      scenery.push(barrier);
-      barrierData.push({ pos: bp.clone(), normal: right.clone().multiplyScalar(-side), width: 3 });
+      const bp = p.clone().add(right.clone().multiplyScalar(side * (width / 2 + 1.0)));
+      bp.y += 0.45;
+      const g = new THREE.BoxGeometry(3.6, 0.9, 0.35);
+      g.applyMatrix4(new THREE.Matrix4().makeRotationY(Math.atan2(tan.x, tan.z)));
+      g.translate(bp.x, bp.y, bp.z);
+      (i % 2 === 0 ? railGeosWhite : railGeosRed).push(g);
+      barrierData.push({ pos: bp.clone(), normal: right.clone().multiplyScalar(-side), width: 3.6 });
     }
   }
+  const railMatWhite = new THREE.MeshStandardMaterial({ color: 0xf0f2f4, roughness: 0.55 });
+  const railMatRed = new THREE.MeshStandardMaterial({ color: 0xd64545, roughness: 0.55, emissive: 0x551111, emissiveIntensity: 0.4 });
+  const railWhite = new THREE.Mesh(mergeGeometries(railGeosWhite, false)!, railMatWhite);
+  const railRed = new THREE.Mesh(mergeGeometries(railGeosRed, false)!, railMatRed);
+  group.add(railWhite, railRed);
+  scenery.push(railWhite, railRed);
 
   // Environment-specific scenery
   const placeProps = (count: number, offsetMin: number, offsetMax: number, build: () => THREE.Object3D) => {
@@ -410,32 +465,22 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
   };
 
   if (spec.environment === 'city' || spec.environment === 'night' || spec.environment === 'tunnel') {
-    // Buildings
-    placeProps(80, 25, 80, () => {
-      const h = 10 + Math.random() * 40;
-      const w = 8 + Math.random() * 12;
-      const d = 8 + Math.random() * 12;
-      const color = spec.environment === 'night'
-        ? new THREE.Color().setHSL(0.6 + Math.random() * 0.2, 0.3, 0.1 + Math.random() * 0.15).getHex()
-        : new THREE.Color().setHSL(0.08 + Math.random() * 0.1, 0.1, 0.3 + Math.random() * 0.3).getHex();
+    // Buildings with window facades
+    placeProps(90, 25, 85, () => {
+      const h = 12 + Math.random() * 42;
+      const w = 9 + Math.random() * 12;
+      const d = 9 + Math.random() * 12;
+      const night = spec.environment === 'night';
+      const tex = pickBuildingTexture(night);
       const mat = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.7,
-        emissive: spec.environment === 'night' ? color : 0x000000,
-        emissiveIntensity: spec.environment === 'night' ? 0.3 : 0,
+        map: tex,
+        roughness: 0.85,
+        metalness: 0.05,
+        ...(night ? { emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.45 } : {}),
       });
       const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       b.position.y = h / 2;
       b.castShadow = true;
-      // Windows
-      if (spec.environment === 'night' && Math.random() < 0.5) {
-        const winMat = new THREE.MeshStandardMaterial({ color: 0xffcc66, emissive: 0xffaa33, emissiveIntensity: 1 });
-        for (let k = 0; k < 6; k++) {
-          const win = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 1.2), winMat);
-          win.position.set((Math.random() - 0.5) * w * 0.8, Math.random() * h - h / 2, d / 2 + 0.01);
-          b.add(win);
-        }
-      }
       return b;
     });
   } else if (spec.environment === 'desert') {
@@ -566,8 +611,13 @@ export class GameEngine {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.toneMappingExposure = 1.35;
     container.appendChild(this.renderer.domElement);
+
+    // Studio reflections — makes car paint, glass and chrome crisp and glossy
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
 
     // Skid mark buffer
     this.skidGeo = new THREE.BufferGeometry();
@@ -606,8 +656,8 @@ export class GameEngine {
     this.repairCooldown = 0;
     this.finishedPosition = 0;
 
-    // Sky / fog
-    this.scene.fog = new THREE.FogExp2(track.fogColor, track.fogDensity);
+    // Sky / fog (lighter haze so the world stays clear)
+    this.scene.fog = new THREE.FogExp2(track.fogColor, track.fogDensity * 0.55);
     this.scene.background = new THREE.Color(track.skyColor);
 
     // Skybox dome
@@ -625,12 +675,12 @@ export class GameEngine {
     this.skyMesh = new THREE.Mesh(skyGeo, skyMat);
     this.scene.add(this.skyMesh);
 
-    // Lights
-    const ambient = new THREE.AmbientLight(track.ambientColor, 0.6);
+    // Lights — brighter, clearer world
+    const ambient = new THREE.AmbientLight(track.ambientColor, 0.95);
     this.scene.add(ambient);
-    const hemi = new THREE.HemisphereLight(track.skyColor, track.groundColor, 0.4);
+    const hemi = new THREE.HemisphereLight(track.skyColor, track.groundColor, 0.7);
     this.scene.add(hemi);
-    this.sun = new THREE.DirectionalLight(track.sunColor, track.environment === 'night' ? 0.2 : 1.0);
+    this.sun = new THREE.DirectionalLight(track.sunColor, track.environment === 'night' ? 0.5 : 1.7);
     this.sun.position.set(100, 200, 80);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
@@ -876,9 +926,9 @@ export class GameEngine {
       const spec = car.spec;
       // Convert km/h top speed to m/s (with gear/rpm model)
       const maxSpeedMs = spec.topSpeed / 3.6;
-      const accelBase = 18 + spec.acceleration * 4.5; // m/s^2
-      const handlingBase = 1.6 + spec.handling * 0.2; // rad/s steering rate
-      const brakePower = 25 + spec.braking * 4;
+      const accelBase = 20 + spec.acceleration * 5.5; // m/s^2 — snappier launch
+      const handlingBase = 2.2 + spec.handling * 0.22; // rad/s steering rate
+      const brakePower = 30 + spec.braking * 5;
       // drift cap parameter influences lateral friction elsewhere
       const nitroCapacity = 0.6 + spec.nitroCapacity * 0.05;
 
@@ -895,11 +945,12 @@ export class GameEngine {
       car.speed = forwardSpeed;
       car.lateralSpeed = lateralSpeed;
 
-      // Steering (less effective at low speed)
-      const speedFactor = Math.min(1, Math.abs(forwardSpeed) / 20);
-      const steerRate = handlingBase * steer * speedFactor * (drift ? 1.3 : 1);
+      // Steering — quick at low speed, calm and stable at high speed
+      const speedFactor = Math.min(1, Math.abs(forwardSpeed) / 14);
+      const stability = 1 / (1 + Math.abs(forwardSpeed) * 0.004);
+      const steerRate = handlingBase * steer * speedFactor * stability * (drift ? 1.35 : 1);
       const steerSign = forwardSpeed >= 0 ? 1 : -1;
-      car.angularVel += (steerRate * steerSign - car.angularVel) * Math.min(1, dt * 8);
+      car.angularVel += (steerRate * steerSign - car.angularVel) * Math.min(1, dt * 11);
       car.heading += car.angularVel * dt;
 
       // Recompute forward after heading change
@@ -910,9 +961,9 @@ export class GameEngine {
       let accelForce = 0;
       if (throttle > 0 && forwardSpeed < maxSpeedMs * dmgFactor) {
         accelForce = throttle * accelBase * dmgFactor;
-        // Reduce accel near top speed
+        // Reduce accel near top speed (gentle curve keeps mid-range punch)
         const speedRatio = Math.abs(forwardSpeed) / (maxSpeedMs * dmgFactor);
-        accelForce *= Math.max(0, 1 - speedRatio);
+        accelForce *= Math.max(0, 1 - speedRatio * speedRatio);
       }
       // Brake / reverse
       if (brake > 0) {
@@ -924,7 +975,7 @@ export class GameEngine {
       }
       // Nitro boost
       if (nitro && forwardSpeed > 2) {
-        accelForce += 15 * dmgFactor;
+        accelForce += 24 * dmgFactor;
         car.nitro -= dt * 0.15 / nitroCapacity;
         if (car.nitro < 0) car.nitro = 0;
         car.nitroActive = true;
@@ -942,10 +993,10 @@ export class GameEngine {
       const net = accelForce - drag - rolling;
       car.velocity.add(forward.clone().multiplyScalar(net * dt));
 
-      // Drift: lateral friction reduction
-      let lateralFriction = 8;
+      // Drift: strong grip normally, slides on demand
+      let lateralFriction = 11;
       if (drift && Math.abs(forwardSpeed) > 8 && Math.abs(steer) > 0.2) {
-        lateralFriction = 2.5 - spec.driftRating * 0.12;
+        lateralFriction = Math.max(0.9, 3.4 - spec.driftRating * 0.16);
         car.driftFactor = Math.min(1, car.driftFactor + dt * 2);
         car.isDrifting = true;
         // Regenerate nitro during drift
@@ -983,7 +1034,7 @@ export class GameEngine {
       const distFromTrack = this.distFromTrack(car.position);
       car.onTrack = distFromTrack < this.trackSpec!.width / 2;
       if (!car.onTrack) {
-        car.velocity.multiplyScalar(Math.max(0.9, 1 - dt * 3));
+        car.velocity.multiplyScalar(Math.max(0.8, 1 - dt * 4.5));
       }
 
       // Barrier collision

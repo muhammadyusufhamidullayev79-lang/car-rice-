@@ -514,6 +514,17 @@ export const RaceHUD: React.FC<HUDProps> = ({ hud, cameraMode, onPause, trackCur
   const speedRatio = Math.min(1, hud.speed / 500);
   return (
     <div className="absolute inset-0 pointer-events-none select-none">
+      {/* Damage flash vignette — screen edges burn red as the car gets wrecked */}
+      <div className="absolute inset-0" style={{ boxShadow: `inset 0 0 150px rgba(255,25,25,${Math.min(1, hud.damage) * 0.65})`, transition: 'box-shadow 0.25s' }} />
+
+      {/* Control hint at race start */}
+      {(hud.countdown > 0 || hud.raceTime < 6) && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 text-center">
+          <div className="inline-block bg-black/60 backdrop-blur px-4 py-2 rounded border border-white/15 text-[10px] md:text-xs tracking-widest text-white/80 whitespace-nowrap">
+            <b className="text-white">W</b> GAS&nbsp;·&nbsp;<b className="text-white">S</b> BRAKE&nbsp;·&nbsp;<b className="text-white">A/D</b> STEER&nbsp;·&nbsp;<b className="text-white">SHIFT</b> DRIFT&nbsp;·&nbsp;<b className="text-white">SPACE</b> NITRO&nbsp;·&nbsp;<b className="text-white">F1</b> REPAIR
+          </div>
+        </div>
+      )}
       {/* Speed lines overlay at high speed */}
       {hud.speed > 250 && (
         <div className="absolute inset-0 speedline" style={{ opacity: Math.min(0.6, (hud.speed - 250) / 300) }} />

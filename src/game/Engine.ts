@@ -200,6 +200,15 @@ export function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
     (group as any).headLight = headLight;
   }
 
+  // Soft contact shadow under the car (grounds it visually)
+  const blob = new THREE.Mesh(
+    new THREE.PlaneGeometry(5.4, 2.9),
+    new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false })
+  );
+  blob.rotation.x = -Math.PI / 2;
+  blob.position.y = 0.03;
+  group.add(blob);
+
   // Car model is built with the nose along +X, but physics/camera use +Z forward.
   // Wrap it rotated -90° so the car visually faces the direction it travels.
   group.rotation.y = -Math.PI / 2;
@@ -314,6 +323,23 @@ function pickBuildingTexture(night: boolean): THREE.CanvasTexture {
   tex.anisotropy = 4;
   buildingTexCache.set(key, tex);
   return tex;
+}
+
+// Soft blob shadow texture (shared)
+let blobTexCache: THREE.CanvasTexture | null = null;
+function blobTexture(): THREE.CanvasTexture {
+  if (blobTexCache) return blobTexCache;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(64, 64, 6, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(0,0,0,0.55)');
+  grad.addColorStop(0.65, 'rgba(0,0,0,0.28)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  blobTexCache = new THREE.CanvasTexture(c);
+  return blobTexCache;
 }
 
 function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
@@ -566,6 +592,26 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
     });
   }
 
+  // Clouds in the sky (not for night/tunnel)
+  if (spec.environment !== 'night' && spec.environment !== 'tunnel') {
+    const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, fog: false });
+    for (let i = 0; i < 12; i++) {
+      const cl = new THREE.Group();
+      const n = 2 + Math.floor(Math.random() * 3);
+      for (let k = 0; k < n; k++) {
+        const s = 9 + Math.random() * 15;
+        const puff = new THREE.Mesh(new THREE.SphereGeometry(s, 10, 8), cloudMat);
+        puff.position.set(k * s * 0.9, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 9);
+        puff.scale.y = 0.45;
+        cl.add(puff);
+      }
+      const ang = Math.random() * Math.PI * 2;
+      const rad = 150 + Math.random() * 500;
+      cl.position.set(Math.cos(ang) * rad, 100 + Math.random() * 90, Math.sin(ang) * rad);
+      group.add(cl);
+    }
+  }
+
   // Checkpoints (split track into N checkpoints)
   const cpCount = 16;
   const checkpoints: THREE.Vector3[] = [];
@@ -600,6 +646,7 @@ export class GameEngine {
   private sun: THREE.DirectionalLight | null = null;
   private repairCooldown = 0;
   private exhaustTimer = 0;
+  private damageSmokeTimer = 0;
   private shakeIntensity = 0;
   private smokeParticles: { mesh: THREE.Mesh; life: number; vel: THREE.Vector3 }[] = [];
   private skidMarks: THREE.Mesh[] = [];
@@ -1060,7 +1107,7 @@ export class GameEngine {
       // Barrier collision
       this.handleBarriers(car, dt);
 
-      // Car-to-car collision
+      // Car-to-car collision — both cars take real damage + sparks
       for (const other of this.cars) {
         if (other === car) continue;
         const d = car.position.distanceTo(other.position);
@@ -1068,11 +1115,16 @@ export class GameEngine {
           const push = car.position.clone().sub(other.position).normalize().multiplyScalar((3 - d) * 0.5);
           car.position.add(push);
           const relSpeed = Math.abs(car.speed - other.speed);
-          if (relSpeed > 5) {
-            car.damage = Math.min(1, car.damage + relSpeed * 0.005);
-            if (car.isPlayer) {
-              this.shakeIntensity = Math.min(1, this.shakeIntensity + relSpeed * 0.01);
-              audio.playCrash(Math.min(1, relSpeed / 30));
+          if (relSpeed > 3) {
+            car.damage = Math.min(1, car.damage + relSpeed * 0.015 + 0.02);
+            other.damage = Math.min(1, other.damage + relSpeed * 0.01);
+            // Slow both down on impact
+            car.velocity.multiplyScalar(0.85);
+            if (car.isPlayer || other.isPlayer) {
+              this.shakeIntensity = Math.min(1.4, this.shakeIntensity + relSpeed * 0.03 + 0.15);
+              audio.playCrash(Math.min(1, relSpeed / 25));
+              const mid = car.position.clone().add(other.position).multiplyScalar(0.5);
+              this.addSparks(mid, push.normalize());
             }
           }
         }
@@ -1211,13 +1263,14 @@ export class GameEngine {
       const normal = right.clone().multiplyScalar(-sign);
       const velDot = car.velocity.dot(normal);
       if (velDot > 0) {
-        car.velocity.add(normal.clone().multiplyScalar(-velDot * 1.3));
-        car.velocity.multiplyScalar(0.7);
+        car.velocity.add(normal.clone().multiplyScalar(-velDot * 1.5));
+        car.velocity.multiplyScalar(0.55);
         const impactSpeed = Math.abs(velDot);
-        car.damage = Math.min(1, car.damage + impactSpeed * 0.01);
-        if (car.isPlayer && impactSpeed > 3) {
-          this.shakeIntensity = Math.min(1, this.shakeIntensity + impactSpeed * 0.02);
-          audio.playCrash(Math.min(1, impactSpeed / 20));
+        // Real damage: every wall hit hurts, hard hits hurt a lot
+        car.damage = Math.min(1, car.damage + impactSpeed * 0.02 + 0.05);
+        if (car.isPlayer) {
+          this.shakeIntensity = Math.min(1.4, this.shakeIntensity + impactSpeed * 0.05 + 0.25);
+          audio.playCrash(Math.min(1, impactSpeed / 15));
           this.addSparks(car.position.clone(), normal);
         }
       }
@@ -1366,7 +1419,20 @@ export class GameEngine {
         const side = Math.random() < 0.5 ? -0.4 : 0.4;
         const pos = car.position.clone().add(new THREE.Vector3(-fx * 2.28 + rx * side, 0.3, -fz * 2.28 + rz * side));
         const vel = new THREE.Vector3(-fx * 2.2 + (Math.random() - 0.5) * 0.5, 0.7 + Math.random() * 0.4, -fz * 2.2 + (Math.random() - 0.5) * 0.5);
-        this.addExhaustPuff(pos, vel);
+        this.addExhaustPuff(pos, vel, 0xa8adb3, 0.55);
+      }
+    }
+
+    // Dark smoke from the hood when the car is damaged
+    this.damageSmokeTimer -= dt;
+    if (this.damageSmokeTimer <= 0) {
+      this.damageSmokeTimer = 0.13;
+      for (const car of this.cars) {
+        if (car.damage < 0.4) continue;
+        const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
+        const pos = car.position.clone().add(new THREE.Vector3(fx * 1.6, 0.75, fz * 1.6));
+        const vel = new THREE.Vector3(fx * 1.5 + (Math.random() - 0.5) * 0.6, 1.0 + Math.random() * 0.5, fz * 1.5 + (Math.random() - 0.5) * 0.6);
+        this.addExhaustPuff(pos, vel, car.damage > 0.7 ? 0x141414 : 0x3a3d42, 0.85);
       }
     }
 
@@ -1405,15 +1471,15 @@ export class GameEngine {
     this.smokeParticles.push({ mesh: m, life: 0.8, vel: new THREE.Vector3((Math.random() - 0.5) * 2, 0.5, (Math.random() - 0.5) * 2) });
   }
 
-  private addExhaustPuff(pos: THREE.Vector3, vel: THREE.Vector3) {
+  private addExhaustPuff(pos: THREE.Vector3, vel: THREE.Vector3, color = 0xa8adb3, life = 0.55) {
     if (this.smokeParticles.length > 60) return;
-    const size = 0.16 + Math.random() * 0.2;
+    const size = 0.2 + Math.random() * 0.25;
     const geo = new THREE.SphereGeometry(size, 6, 6);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xa8adb3, transparent: true, opacity: 0.5, depthWrite: false });
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, depthWrite: false });
     const m = new THREE.Mesh(geo, mat);
     m.position.copy(pos);
     this.scene.add(m);
-    this.smokeParticles.push({ mesh: m, life: 0.55, vel });
+    this.smokeParticles.push({ mesh: m, life, vel });
   }
 
   private addFlame(pos: THREE.Vector3) {

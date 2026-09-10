@@ -236,6 +236,7 @@ export default function App() {
       {/* Menus */}
       {screen === 'menu' && (
         <MainMenu
+          selectedCar={selectedCar}
           onPlay={() => setScreen('career')}
           onQuickRace={() => setScreen('quickrace')}
           onGarage={() => setScreen('garage')}

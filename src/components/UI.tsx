@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CARS, TRACKS, CAREER, CarSpec, TrackSpec } from '../game/data';
 import { HUDData, RaceResult } from '../game/Engine';
+import CarShowcase from './CarShowcase';
 
 // ==============================
 // Utility
@@ -47,6 +48,7 @@ export function writeSave(s: SaveData) {
 // Main Menu
 // ==============================
 interface MainMenuProps {
+  selectedCar: CarSpec;
   onPlay: () => void;
   onQuickRace: () => void;
   onGarage: () => void;
@@ -55,7 +57,7 @@ interface MainMenuProps {
   onCredits: () => void;
 }
 
-export const MainMenu: React.FC<MainMenuProps> = ({ onPlay, onQuickRace, onGarage, onSettings, onControls, onCredits }) => {
+export const MainMenu: React.FC<MainMenuProps> = ({ selectedCar, onPlay, onQuickRace, onGarage, onSettings, onControls, onCredits }) => {
   return (
     <div className="absolute inset-0 flex flex-col scanlines" style={{ background: 'linear-gradient(135deg, #0a0a14 0%, #1a0a1a 50%, #0a0a14 100%)' }}>
       <div className="absolute inset-0 vignette" />
@@ -74,14 +76,17 @@ export const MainMenu: React.FC<MainMenuProps> = ({ onPlay, onQuickRace, onGarag
             <button className="btn-race" onClick={onCredits}>★ Credits</button>
           </div>
         </div>
-        <div className="flex-1 relative hidden md:flex items-center justify-center">
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-[500px] h-[500px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(255,59,59,0.25), transparent 70%)' }} />
+        <div className="flex-1 relative hidden md:block">
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="w-[520px] h-[520px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(255,59,59,0.22), transparent 70%)' }} />
           </div>
-          <div className="relative text-center">
-            <div className="text-white/30 text-xs tracking-[0.3em] mb-4">SEASON 01</div>
-            <div className="text-9xl font-black hud-font text-white/10">01</div>
-            <div className="text-white/50 tracking-widest text-sm mt-4">RISE OF THE APEX</div>
+          <div className="absolute inset-0">
+            <CarShowcase car={selectedCar} />
+          </div>
+          <div className="absolute bottom-10 left-0 right-0 text-center pointer-events-none">
+            <div className="text-white/40 text-[10px] tracking-[0.3em] mb-1">YOUR RIDE</div>
+            <div className="text-3xl font-black hud-font" style={{ color: `#${selectedCar.color.toString(16).padStart(6, '0')}` }}>{selectedCar.name}</div>
+            <div className="text-white/50 text-xs tracking-widest mt-1">{selectedCar.tagline}</div>
           </div>
         </div>
       </div>
@@ -162,8 +167,8 @@ export const CareerScreen: React.FC<CareerProps> = ({ save, selectedCar, onStart
                 className="aspect-video mb-4 rounded relative overflow-hidden"
                 style={{ background: `linear-gradient(135deg, #${selectedCar.color.toString(16).padStart(6, '0')}44, #000)` }}
               >
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <CarIcon spec={selectedCar} size={120} />
+                <div className="absolute inset-0">
+                  <CarShowcase car={selectedCar} />
                 </div>
               </div>
               <div className="text-2xl font-black hud-font" style={{ color: `#${selectedCar.color.toString(16).padStart(6, '0')}` }}>{selectedCar.name}</div>
@@ -294,14 +299,6 @@ interface GarageProps {
 
 export const GarageScreen: React.FC<GarageProps> = ({ save, selectedCar, onSelect, onUnlock, onBack }) => {
   const [viewing, setViewing] = useState<CarSpec>(selectedCar);
-  const [rotation, setRotation] = useState(0);
-
-  useEffect(() => {
-    let raf = 0;
-    const loop = () => { setRotation(r => (r + 0.3) % 360); raf = requestAnimationFrame(loop); };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
 
   return (
     <div className="absolute inset-0 flex flex-col" style={{ background: 'radial-gradient(ellipse at center, #1a0a1a 0%, #0a0a14 70%)' }}>
@@ -315,18 +312,12 @@ export const GarageScreen: React.FC<GarageProps> = ({ save, selectedCar, onSelec
 
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
           <div className="lg:col-span-2 flex flex-col">
-            <div className="garage-car-stage flex-1 rounded flex items-center justify-center relative overflow-hidden min-h-[300px]">
-              <div
-                style={{
-                  transform: `perspective(800px) rotateY(${rotation}deg)`,
-                  transformStyle: 'preserve-3d',
-                  transition: 'transform 0.05s linear',
-                }}
-              >
-                <CarIcon spec={viewing} size={280} />
+            <div className="garage-car-stage flex-1 rounded relative overflow-hidden min-h-[300px]">
+              <div className="absolute inset-0">
+                <CarShowcase car={viewing} />
               </div>
-              <div className="absolute top-4 left-4 text-white/40 text-xs tracking-widest">3D PREVIEW</div>
-              <div className="absolute bottom-4 right-4 text-white/40 text-xs tracking-widest">ROTATING</div>
+              <div className="absolute top-4 left-4 text-white/40 text-xs tracking-widest pointer-events-none">3D PREVIEW</div>
+              <div className="absolute bottom-4 right-4 text-white/40 text-xs tracking-widest pointer-events-none">ROTATING</div>
             </div>
 
             <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-2">

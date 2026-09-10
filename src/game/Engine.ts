@@ -63,7 +63,7 @@ export interface InputState {
 // ============================================================
 // Car mesh builder
 // ============================================================
-function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
+export function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
   const group = new THREE.Group();
   const bodyColor = spec.color;
   const accentColor = spec.accentColor;
@@ -127,9 +127,9 @@ function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
   sideGlass2.position.z = -bodyW * 0.47;
   group.add(sideGlass2);
 
-  // Wheels
+  // Wheels — axle along Z (across the car), so the tread faces the road
   const wheelGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.28, 16);
-  wheelGeo.rotateZ(Math.PI / 2);
+  wheelGeo.rotateX(Math.PI / 2);
   const wheelPositions: [number, number, number][] = [
     [bodyLen * 0.32, 0.38, bodyW * 0.5],
     [bodyLen * 0.32, 0.38, -bodyW * 0.5],
@@ -145,7 +145,7 @@ function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
     wheels.push(w);
     // Rim
     const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.3, 8), chrome);
-    rim.rotateZ(Math.PI / 2);
+    rim.rotateX(Math.PI / 2);
     rim.position.set(...p);
     group.add(rim);
   }
@@ -599,6 +599,7 @@ export class GameEngine {
   private input: InputState = { throttle: 0, brake: 0, steer: 0, drift: false, nitro: false, repair: false, camera: false };
   private sun: THREE.DirectionalLight | null = null;
   private repairCooldown = 0;
+  private exhaustTimer = 0;
   private shakeIntensity = 0;
   private smokeParticles: { mesh: THREE.Mesh; life: number; vel: THREE.Vector3 }[] = [];
   private skidMarks: THREE.Mesh[] = [];
@@ -1112,7 +1113,8 @@ export class GameEngine {
       if (wheels) {
         const rotSpeed = forwardSpeed * dt * 3;
         wheels.forEach((w, i) => {
-          w.rotation.x += rotSpeed;
+          // Roll about the axle (Z axis across the car)
+          w.rotation.z -= rotSpeed;
           // Front wheels steer
           if (i < 2) w.rotation.y = steer * 0.4;
         });
@@ -1339,10 +1341,32 @@ export class GameEngine {
           }
         }
       }
-      // Nitro exhaust
+      // Nitro exhaust flames — twin pipes at the rear bumper
       if (car.nitroActive) {
-        const back = car.position.clone().add(new THREE.Vector3(-Math.sin(car.heading) * 2.2, 0.5, -Math.cos(car.heading) * 2.2));
-        this.addFlame(back);
+        const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
+        const rx = Math.cos(car.heading), rz = -Math.sin(car.heading);
+        for (const s of [-0.4, 0.4]) {
+          this.addFlame(car.position.clone().add(new THREE.Vector3(-fx * 2.28 + rx * s, 0.3, -fz * 2.28 + rz * s)));
+        }
+      }
+    }
+
+    // Exhaust smoke puffs while accelerating (player + AI cars)
+    this.exhaustTimer -= dt;
+    if (this.exhaustTimer <= 0) {
+      this.exhaustTimer = 0.09 + Math.random() * 0.07;
+      for (const car of this.cars) {
+        if (car.nitroActive) continue;
+        const pushing = car.isPlayer
+          ? this.input.throttle > 0.05 && this.state === 'racing'
+          : this.state === 'racing' && car.speed > 8;
+        if (!pushing) continue;
+        const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
+        const rx = Math.cos(car.heading), rz = -Math.sin(car.heading);
+        const side = Math.random() < 0.5 ? -0.4 : 0.4;
+        const pos = car.position.clone().add(new THREE.Vector3(-fx * 2.28 + rx * side, 0.3, -fz * 2.28 + rz * side));
+        const vel = new THREE.Vector3(-fx * 2.2 + (Math.random() - 0.5) * 0.5, 0.7 + Math.random() * 0.4, -fz * 2.2 + (Math.random() - 0.5) * 0.5);
+        this.addExhaustPuff(pos, vel);
       }
     }
 
@@ -1381,15 +1405,26 @@ export class GameEngine {
     this.smokeParticles.push({ mesh: m, life: 0.8, vel: new THREE.Vector3((Math.random() - 0.5) * 2, 0.5, (Math.random() - 0.5) * 2) });
   }
 
-  private addFlame(pos: THREE.Vector3) {
+  private addExhaustPuff(pos: THREE.Vector3, vel: THREE.Vector3) {
     if (this.smokeParticles.length > 60) return;
-    const size = 0.3 + Math.random() * 0.3;
-    const geo = new THREE.SphereGeometry(size, 5, 5);
-    const mat = new THREE.MeshBasicMaterial({ color: Math.random() < 0.5 ? 0x00aaff : 0xffaa00, transparent: true, opacity: 0.9, depthWrite: false });
+    const size = 0.16 + Math.random() * 0.2;
+    const geo = new THREE.SphereGeometry(size, 6, 6);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xa8adb3, transparent: true, opacity: 0.5, depthWrite: false });
     const m = new THREE.Mesh(geo, mat);
     m.position.copy(pos);
     this.scene.add(m);
-    this.smokeParticles.push({ mesh: m, life: 0.2, vel: new THREE.Vector3((Math.random() - 0.5), 0, (Math.random() - 0.5)) });
+    this.smokeParticles.push({ mesh: m, life: 0.55, vel });
+  }
+
+  private addFlame(pos: THREE.Vector3) {
+    if (this.smokeParticles.length > 60) return;
+    const size = 0.4 + Math.random() * 0.45;
+    const geo = new THREE.SphereGeometry(size, 5, 5);
+    const mat = new THREE.MeshBasicMaterial({ color: Math.random() < 0.5 ? 0x00aaff : 0xffaa00, transparent: true, opacity: 0.95, depthWrite: false });
+    const m = new THREE.Mesh(geo, mat);
+    m.position.copy(pos);
+    this.scene.add(m);
+    this.smokeParticles.push({ mesh: m, life: 0.28, vel: new THREE.Vector3((Math.random() - 0.5), 0, (Math.random() - 0.5)) });
   }
 
   private addSparks(pos: THREE.Vector3, _normal: THREE.Vector3) {

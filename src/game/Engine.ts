@@ -1,8 +1,14 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { CarSpec, TrackSpec } from './data';
 import { audio } from './audio';
+
+export type EngineQuality = 'low' | 'medium' | 'high';
 
 // ============================================================
 // Types
@@ -170,7 +176,7 @@ export function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
   // Refs for brake-light glow and damage deformation
   (group as any).tailLights = [tl, tl2];
   (group as any).damageParts = {
-    hood, trunk, cabin,
+    body, hood, trunk, cabin,
     glass: [ws, wsR, sideGlass, sideGlass2],
     paint,
     baseColor: paint.color.clone(),
@@ -355,7 +361,7 @@ function blobTexture(): THREE.CanvasTexture {
   return blobTexCache;
 }
 
-function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
+function buildTrack(scene: THREE.Scene, spec: TrackSpec, quality: EngineQuality = 'high'): TrackData {
   const group = new THREE.Group();
   scene.add(group);
 
@@ -419,8 +425,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
     const hw = 0.21; // half width of the stripe
     p0.y += 0.045; p1.y += 0.045;
     const a = p0.clone().add(r0.clone().multiplyScalar(-hw));
-    const b = p0.clone().add(r0.clone().multiplyScalar(hw));
-    const c = p1.clone().add(r1.clone().multiplyScalar(hw));
+    const b = p0.clone().add(r0.clone c = p1.clone().add(r1.clone().multiplyScalar(hw));
     const d = p1.clone().add(r1.clone().multiplyScalar(-hw));
     const idx = cverts.length / 3;
     cverts.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
@@ -538,7 +543,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
       });
       const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       b.position.y = h / 2;
-      b.castShadow = true;
+      b.castShadow = quality !== 'low';
       return b;
     });
   } else if (spec.environment === 'desert') {
@@ -674,9 +679,14 @@ export class GameEngine {
   private finishedPosition = 0;
   private skyMesh: THREE.Mesh | null = null;
 
-  constructor(container: HTMLDivElement, callbacks: RaceCallbacks) {
+  private composer: EffectComposer | null = null;
+  private engineQuality: EngineQuality = 'high';
+
+  constructor(container: HTMLDivElement, callbacks: RaceCallbacks, opts?: { quality?: EngineQuality }) {
     this.container = container;
     this.callbacks = callbacks;
+    this.engineQuality = opts?.quality ?? 'high';
+    const q = this.engineQuality;
 
     this.scene = new THREE.Scene();
     // Fallback to window size if container has no layout yet (prevents 0x0 black canvas)
@@ -686,10 +696,11 @@ export class GameEngine {
     this.camera.position.set(0, 10, 20);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Quality: pixel ratio is the biggest FPS lever
+    this.renderer.setPixelRatio(q === 'low' ? 1 : Math.min(window.devicePixelRatio, q === 'medium' ? 1.5 : 2));
     this.renderer.setSize(initW, initH);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = q !== 'low';
+    this.renderer.shadowMap.type = q === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.35;
@@ -699,6 +710,19 @@ export class GameEngine {
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
+
+    // Cinematic bloom (high quality only) — glowing lights, sun glints
+    if (q === 'high') {
+      try {
+        this.composer = new EffectComposer(this.renderer);
+        this.composer.addPass(new RenderPass(this.scene, this.camera));
+        const bloom = new UnrealBloomPass(new THREE.Vector2(initW, initH), 0.32, 0.5, 0.88);
+        this.composer.addPass(bloom);
+        this.composer.addPass(new OutputPass());
+      } catch {
+        this.composer = null;
+      }
+    }
 
     // Skid mark buffer
     this.skidGeo = new THREE.BufferGeometry();
@@ -765,7 +789,8 @@ export class GameEngine {
     this.sun = new THREE.DirectionalLight(track.sunColor, track.environment === 'night' ? 0.5 : 1.7);
     this.sun.position.set(100, 200, 80);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
+    const shSize = this.engineQuality === 'high' ? 1024 : 512;
+    this.sun.shadow.mapSize.set(shSize, shSize);
     this.sun.shadow.camera.near = 10;
     this.sun.shadow.camera.far = 600;
     this.sun.shadow.camera.left = -150;
@@ -777,7 +802,7 @@ export class GameEngine {
     this.scene.add(this.sun.target);
 
     // Build track
-    this.trackData = buildTrack(this.scene, track);
+    this.trackData = buildTrack(this.scene, track, this.engineQuality);
 
     // Spawn cars on grid
     const startT = 0;
@@ -921,6 +946,8 @@ export class GameEngine {
   dispose() {
     this.cleanup();
     window.removeEventListener('resize', this.onResize);
+    try { this.composer?.dispose(); } catch { /* noop */ }
+    this.composer = null;
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement) {
       this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
@@ -974,7 +1001,8 @@ export class GameEngine {
       this.sun.position.copy(this.player.position).add(new THREE.Vector3(100, 200, 80));
     }
 
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
   };
 
   // ==============================
@@ -1044,9 +1072,9 @@ export class GameEngine {
       let accelForce = 0;
       if (throttle > 0 && forwardSpeed < maxSpeedMs * dmgFactor) {
         accelForce = throttle * accelBase * dmgFactor;
-        // Reduce accel near top speed (gentle curve keeps mid-range punch)
+        // Reduce accel near top speed (cubic keeps the pull strong until ~90%)
         const speedRatio = Math.abs(forwardSpeed) / (maxSpeedMs * dmgFactor);
-        accelForce *= Math.max(0, 1 - speedRatio * speedRatio);
+        accelForce *= Math.max(0, 1 - speedRatio * speedRatio * speedRatio);
       }
       // Brake / reverse
       if (brake > 0) {
@@ -1071,8 +1099,9 @@ export class GameEngine {
       }
 
       // Drag / rolling resistance
-      const drag = forwardSpeed * Math.abs(forwardSpeed) * 0.004;
-      const rolling = forwardSpeed * 0.3;
+      // Drag / rolling resistance (very light — car truly reaches its spec top speed)
+      const drag = forwardSpeed * Math.abs(forwardSpeed) * 0.0008;
+      const rolling = forwardSpeed * 0.06;
       const net = accelForce - drag - rolling;
       car.velocity.add(forward.clone().multiplyScalar(net * dt));
 
@@ -1101,9 +1130,10 @@ export class GameEngine {
       const latDamp = car.velocity.clone().add(rightVec.clone().multiplyScalar(-lateralSpeed));
       car.velocity.lerp(latDamp, Math.min(1, lateralFriction * dt));
 
-      // Clamp max speed
-      if (car.velocity.length() > maxSpeedMs * 1.2 * dmgFactor) {
-        car.velocity.setLength(maxSpeedMs * 1.2 * dmgFactor);
+      // Clamp max speed (nitro pushes beyond spec top speed)
+      const clampMax = maxSpeedMs * (nitro ? 1.32 : 1.18) * dmgFactor;
+      if (car.velocity.length() > clampMax) {
+        car.velocity.setLength(clampMax);
       }
 
       // Move
@@ -1211,16 +1241,20 @@ export class GameEngine {
         const dp = (car.mesh as any).damageParts;
         if (dp) {
           const d = car.damage;
-          dp.hood.rotation.z = -d * 0.06;
-          dp.trunk.rotation.z = d * 0.05;
-          dp.cabin.rotation.z = d * 0.025;
+          // DRAMATIC wreck: heavy panel sag, body crumple, shattered dark glass
+          dp.hood.rotation.z = -d * 0.22;
+          dp.hood.position.y = 0.72 - d * 0.08;
+          dp.trunk.rotation.z = d * 0.16;
+          dp.cabin.rotation.z = d * 0.07;
+          dp.body.scale.z = 1 - d * 0.07;
+          dp.body.scale.y = 1 - d * 0.05;
           for (const g of dp.glass as THREE.Mesh[]) {
             const gm = g.material as THREE.MeshStandardMaterial;
-            gm.color.setHex(d > 0.35 ? 0x1a2028 : 0x35506a);
-            gm.opacity = Math.min(0.95, 0.6 + d * 0.35);
-            gm.roughness = Math.min(0.7, 0.12 + d * 0.5);
+            gm.color.setHex(d > 0.25 ? 0x11151b : 0x35506a);
+            gm.opacity = Math.min(0.97, 0.6 + d * 0.37);
+            gm.roughness = Math.min(0.8, 0.12 + d * 0.6);
           }
-          dp.paint.color.copy(dp.baseColor).multiplyScalar(1 - d * 0.3);
+          dp.paint.color.copy(dp.baseColor).multiplyScalar(1 - d * 0.45);
         }
       }
 
@@ -1314,10 +1348,11 @@ export class GameEngine {
         const impactSpeed = Math.abs(velDot);
         // Real damage: every wall hit hurts, hard hits hurt a lot
         car.damage = Math.min(1, car.damage + impactSpeed * 0.02 + 0.05);
+        // Sparks fly for any car that slams the wall
+        this.addSparks(car.position.clone(), normal);
         if (car.isPlayer) {
           this.shakeIntensity = Math.min(1.4, this.shakeIntensity + impactSpeed * 0.05 + 0.25);
           audio.playCrash(Math.min(1, impactSpeed / 15));
-          this.addSparks(car.position.clone(), normal);
         }
       }
     }
@@ -1741,4 +1776,6 @@ export class GameEngine {
   getCarPositions() { return this.cars.map(c => ({ pos: c.position.clone(), isPlayer: c.isPlayer, color: c.spec.color, heading: c.heading })); }
   getCameraMode() { return this.cameraMode; }
   getState() { return this.state; }
+}
+urn this.state; }
 }

@@ -44,7 +44,10 @@ export default function App() {
   });
   const [sfxOn, setSfxOn] = useState(true);
   const [musicOn, setMusicOn] = useState(true);
-  const [quality, setQuality] = useState<'low' | 'medium' | 'high'>('high');
+  const [quality, setQuality] = useState<'low' | 'medium' | 'high'>(() =>
+    // Auto-detect: mobile/tablet starts on LOW for smooth FPS, desktop on HIGH
+    typeof window !== 'undefined' && (('ontouchstart' in window && window.innerWidth < 900) || window.innerWidth < 700) ? 'low' : 'high'
+  );
 
   const [hud, setHud] = useState<HUDData | null>(null);
   const [cameraMode, setCameraMode] = useState<'chase' | 'cockpit'>('chase');
@@ -185,7 +188,7 @@ export default function App() {
         });
       },
       onShake: () => { /* handled via CSS by HUD */ },
-    });
+    }, { quality });
     engineRef.current = engine;
     const noAI = freeDrive || mode === 'timetrial';
     const aiSpecs = noAI ? [] : buildAIFleet(car, track.aiCount, careerIdx !== null ? CAREER[careerIdx].opponentLevel : 0.6, save);
@@ -196,7 +199,7 @@ export default function App() {
     setScreen('race');
     setCameraMode('chase');
     engine.startRace(car, track, aiSpecs, { freeDrive });
-  }, [save]);
+  }, [save, quality]);
 
   const pauseRace = () => {
     engineRef.current?.pause();

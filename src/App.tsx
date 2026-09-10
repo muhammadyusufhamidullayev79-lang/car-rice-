@@ -229,8 +229,9 @@ export default function App() {
   // Render based on screen
   return (
     <div className="fixed inset-0 w-screen h-screen overflow-hidden bg-black text-white">
-      {/* 3D canvas container — always mounted so it can render */}
-      <div ref={containerRef} className="absolute inset-0" style={{ display: (screen === 'race' || screen === 'paused' || screen === 'results') ? 'block' : 'none' }} />
+      {/* 3D canvas container — always mounted AND keeps its size (visibility keeps layout,
+          unlike display:none which makes the canvas 0x0 = black screen) */}
+      <div ref={containerRef} className="absolute inset-0" style={{ visibility: (screen === 'race' || screen === 'paused' || screen === 'results') ? 'visible' : 'hidden' }} />
 
       {/* Menus */}
       {screen === 'menu' && (

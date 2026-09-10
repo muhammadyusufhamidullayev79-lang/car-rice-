@@ -553,12 +553,15 @@ export class GameEngine {
     this.callbacks = callbacks;
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(70, container.clientWidth / container.clientHeight, 0.1, 2000);
+    // Fallback to window size if container has no layout yet (prevents 0x0 black canvas)
+    const initW = container.clientWidth || window.innerWidth || 1280;
+    const initH = container.clientHeight || window.innerHeight || 720;
+    this.camera = new THREE.PerspectiveCamera(70, initW / initH, 0.1, 2000);
     this.camera.position.set(0, 10, 20);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.renderer.setSize(initW, initH);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -591,6 +594,8 @@ export class GameEngine {
 
   startRace(playerCar: CarSpec, track: TrackSpec, aiSpecs: { spec: CarSpec; skill: number }[]) {
     this.cleanup();
+    // Recalculate size now that the container is visible (safety net)
+    this.onResize();
     this.trackSpec = track;
     this.totalDriftScore = 0;
     this.nitroUsedTotal = 0;

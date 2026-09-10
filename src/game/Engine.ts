@@ -813,6 +813,7 @@ export class GameEngine {
         heading,
         angularVel: 0,
         speed: 0,
+        lateralSpeed: 0,
         rpm: 0.2,
         gear: 1,
         nitro: 1,

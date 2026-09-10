@@ -200,8 +200,15 @@ function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
     (group as any).headLight = headLight;
   }
 
-  (group as any).spec = spec;
-  return group;
+  // Car model is built with the nose along +X, but physics/camera use +Z forward.
+  // Wrap it rotated -90° so the car visually faces the direction it travels.
+  group.rotation.y = -Math.PI / 2;
+  const wrap = new THREE.Group();
+  wrap.add(group);
+  (wrap as any).spec = spec;
+  (wrap as any).wheels = (group as any).wheels;
+  (wrap as any).steering = (group as any).steering;
+  return wrap;
 }
 
 // ============================================================
@@ -261,14 +268,14 @@ interface TrackData {
 
 // ---------- Brighter per-environment palettes ----------
 const ENV_GROUND: Record<string, number> = {
-  city: 0x74787e, highway: 0x4f7a3f, mountain: 0x4d7340, desert: 0xd9b57e,
-  coastal: 0x6a9a8f, industrial: 0x5c5c62, tunnel: 0x2e2e33, night: 0x181d2b,
-  rain: 0x525c66, airport: 0x7a7e84, forest: 0x3f7034, circuit: 0x6f6f74,
+  city: 0x8a8e94, highway: 0x5b8a4a, mountain: 0x578348, desert: 0xd9b57e,
+  coastal: 0x74a89a, industrial: 0x68686e, tunnel: 0x2e2e33, night: 0x181d2b,
+  rain: 0x5e6873, airport: 0x8a8e94, forest: 0x48803c, circuit: 0x84888e,
 };
 const ENV_ROAD: Record<string, number> = {
-  city: 0x3d3d44, highway: 0x3b3b41, mountain: 0x3e3e44, desert: 0xa07f52,
-  coastal: 0x3f4046, industrial: 0x43434a, tunnel: 0x2c2c32, night: 0x22222b,
-  rain: 0x36363e, airport: 0x48484e, forest: 0x3c3c42, circuit: 0x3a3a40,
+  city: 0x26262d, highway: 0x26262c, mountain: 0x28282e, desert: 0x8a6b45,
+  coastal: 0x292a30, industrial: 0x2c2c33, tunnel: 0x1f1f24, night: 0x16161e,
+  rain: 0x24242b, airport: 0x303036, forest: 0x27272d, circuit: 0x26262d,
 };
 
 // ---------- Procedural building facade textures (windows, day & night) ----------
@@ -350,7 +357,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
   roadGeo.setIndex(indices);
   roadGeo.computeVertexNormals();
 
-  const roadMat = new THREE.MeshStandardMaterial({ color: ENV_ROAD[spec.environment] ?? spec.roadColor, roughness: 0.95, metalness: 0.0 });
+  const roadMat = new THREE.MeshStandardMaterial({ color: ENV_ROAD[spec.environment] ?? spec.roadColor, roughness: 0.95, metalness: 0.0, envMapIntensity: 0.15 });
   const road = new THREE.Mesh(roadGeo, roadMat);
   road.receiveShadow = true;
   group.add(road);
@@ -365,15 +372,25 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
     if (i % 2 !== 0) continue;
     const p0 = curve.getPointAt(dashT0);
     const p1 = curve.getPointAt(Math.min(dashT1, 0.9999));
-    p0.y += 0.04; p1.y += 0.04;
+    const t0 = curve.getTangentAt(dashT0).normalize();
+    const t1 = curve.getTangentAt(Math.min(dashT1, 0.9999)).normalize();
+    // Offset along the road's lateral axis so dashes stay perpendicular even in corners
+    const r0 = new THREE.Vector3().crossVectors(t0, up).normalize();
+    const r1 = new THREE.Vector3().crossVectors(t1, up).normalize();
+    const hw = 0.21; // half width of the stripe
+    p0.y += 0.045; p1.y += 0.045;
+    const a = p0.clone().add(r0.clone().multiplyScalar(-hw));
+    const b = p0.clone().add(r0.clone().multiplyScalar(hw));
+    const c = p1.clone().add(r1.clone().multiplyScalar(hw));
+    const d = p1.clone().add(r1.clone().multiplyScalar(-hw));
     const idx = cverts.length / 3;
-    cverts.push(p0.x, p0.y, p0.z - 0.15, p0.x, p0.y, p0.z + 0.15, p1.x, p1.y, p1.z + 0.15, p1.x, p1.y, p1.z - 0.15);
+    cverts.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
     cinds.push(idx, idx + 2, idx + 1, idx + 1, idx + 2, idx + 3);
   }
   centerGeo.setAttribute('position', new THREE.Float32BufferAttribute(cverts, 3));
   centerGeo.setIndex(cinds);
   centerGeo.computeVertexNormals();
-  const centerMat = new THREE.MeshStandardMaterial({ color: 0xfffbe8, emissive: 0x8a8a7a, emissiveIntensity: 0.9 });
+  const centerMat = new THREE.MeshStandardMaterial({ color: 0xfffbe8, emissive: 0x99997f, emissiveIntensity: 1.0, envMapIntensity: 0.2 });
   const centerMesh = new THREE.Mesh(centerGeo, centerMat);
   group.add(centerMesh);
 
@@ -387,9 +404,9 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
       const tan = curve.getTangentAt(t).normalize();
       const right = new THREE.Vector3().crossVectors(tan, up).normalize();
       if (right.lengthSq() < 0.01) right.set(1, 0, 0);
-      const edge = p.clone().add(right.clone().multiplyScalar(side * (width / 2 - 0.4)));
-      edge.y += 0.04;
-      const edge2 = p.clone().add(right.clone().multiplyScalar(side * (width / 2 - 0.1)));
+      const edge = p.clone().add(right.clone().multiplyScalar(side * (width / 2 - 0.68)));
+      edge.y += 0.045;
+      const edge2 = p.clone().add(right.clone().multiplyScalar(side * (width / 2 - 0.16)));
       edge2.y += 0.04;
       edgeVerts.push(edge.x, edge.y, edge.z, edge2.x, edge2.y, edge2.z);
     }
@@ -409,7 +426,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
   const groundSize = 3000;
   const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize, 1, 1);
   groundGeo.rotateX(-Math.PI / 2);
-  const groundMat = new THREE.MeshStandardMaterial({ color: ENV_GROUND[spec.environment] ?? spec.groundColor, roughness: 1 });
+  const groundMat = new THREE.MeshStandardMaterial({ color: ENV_GROUND[spec.environment] ?? spec.groundColor, roughness: 1, envMapIntensity: 0.15 });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.receiveShadow = true;
   ground.position.y = -0.05;
@@ -432,15 +449,16 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
     for (const side of [-1, 1]) {
       const bp = p.clone().add(right.clone().multiplyScalar(side * (width / 2 + 1.0)));
       bp.y += 0.45;
-      const g = new THREE.BoxGeometry(3.6, 0.9, 0.35);
+      // Length along Z — after yaw it aligns WITH the road direction (not across it)
+      const g = new THREE.BoxGeometry(0.35, 0.9, 3.6);
       g.applyMatrix4(new THREE.Matrix4().makeRotationY(Math.atan2(tan.x, tan.z)));
       g.translate(bp.x, bp.y, bp.z);
       (i % 2 === 0 ? railGeosWhite : railGeosRed).push(g);
       barrierData.push({ pos: bp.clone(), normal: right.clone().multiplyScalar(-side), width: 3.6 });
     }
   }
-  const railMatWhite = new THREE.MeshStandardMaterial({ color: 0xf0f2f4, roughness: 0.55 });
-  const railMatRed = new THREE.MeshStandardMaterial({ color: 0xd64545, roughness: 0.55, emissive: 0x551111, emissiveIntensity: 0.4 });
+  const railMatWhite = new THREE.MeshStandardMaterial({ color: 0xf0f2f4, roughness: 0.55, envMapIntensity: 0.3 });
+  const railMatRed = new THREE.MeshStandardMaterial({ color: 0xd64545, roughness: 0.55, emissive: 0x551111, emissiveIntensity: 0.4, envMapIntensity: 0.3 });
   const railWhite = new THREE.Mesh(mergeGeometries(railGeosWhite, false)!, railMatWhite);
   const railRed = new THREE.Mesh(mergeGeometries(railGeosRed, false)!, railMatRed);
   group.add(railWhite, railRed);
@@ -476,6 +494,7 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec): TrackData {
         map: tex,
         roughness: 0.85,
         metalness: 0.05,
+        envMapIntensity: 0.35,
         ...(night ? { emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.45 } : {}),
       });
       const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);

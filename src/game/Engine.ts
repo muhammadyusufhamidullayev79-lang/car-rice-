@@ -425,7 +425,8 @@ function buildTrack(scene: THREE.Scene, spec: TrackSpec, quality: EngineQuality 
     const hw = 0.21; // half width of the stripe
     p0.y += 0.045; p1.y += 0.045;
     const a = p0.clone().add(r0.clone().multiplyScalar(-hw));
-    const b = p0.clone().add(r0.clone c = p1.clone().add(r1.clone().multiplyScalar(hw));
+    const b = p0.clone().add(r0.clone().multiplyScalar(hw));
+    const c = p1.clone().add(r1.clone().multiplyScalar(hw));
     const d = p1.clone().add(r1.clone().multiplyScalar(-hw));
     const idx = cverts.length / 3;
     cverts.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
@@ -1776,6 +1777,4 @@ export class GameEngine {
   getCarPositions() { return this.cars.map(c => ({ pos: c.position.clone(), isPlayer: c.isPlayer, color: c.spec.color, heading: c.heading })); }
   getCameraMode() { return this.cameraMode; }
   getState() { return this.state; }
-}
-urn this.state; }
 }

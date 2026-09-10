@@ -162,8 +162,19 @@ export function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
   const tl = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.25), tailMat);
   tl.position.set(-bodyLen * 0.5, 0.55, bodyW * 0.3);
   group.add(tl);
-  const tl2 = tl.clone(); tl2.position.z = -bodyW * 0.3;
+  const tl2 = tl.clone();
+  tl2.material = tailMat.clone(); // independent: one light can die from damage
+  tl2.position.z = -bodyW * 0.3;
   group.add(tl2);
+
+  // Refs for brake-light glow and damage deformation
+  (group as any).tailLights = [tl, tl2];
+  (group as any).damageParts = {
+    hood, trunk, cabin,
+    glass: [ws, wsR, sideGlass, sideGlass2],
+    paint,
+    baseColor: paint.color.clone(),
+  };
 
   // Spoiler (muscle/hypercar/tuner)
   if (spec.bodyStyle !== 'coupe') {
@@ -217,6 +228,8 @@ export function buildCarMesh(spec: CarSpec, isPlayer = false): THREE.Group {
   (wrap as any).spec = spec;
   (wrap as any).wheels = (group as any).wheels;
   (wrap as any).steering = (group as any).steering;
+  (wrap as any).tailLights = (group as any).tailLights;
+  (wrap as any).damageParts = (group as any).damageParts;
   return wrap;
 }
 
@@ -647,6 +660,7 @@ export class GameEngine {
   private repairCooldown = 0;
   private exhaustTimer = 0;
   private damageSmokeTimer = 0;
+  private freeDrive = false;
   private shakeIntensity = 0;
   private smokeParticles: { mesh: THREE.Mesh; life: number; vel: THREE.Vector3 }[] = [];
   private skidMarks: THREE.Mesh[] = [];
@@ -709,8 +723,9 @@ export class GameEngine {
     this.renderer.setSize(w, h);
   };
 
-  startRace(playerCar: CarSpec, track: TrackSpec, aiSpecs: { spec: CarSpec; skill: number }[]) {
+  startRace(playerCar: CarSpec, track: TrackSpec, aiSpecs: { spec: CarSpec; skill: number }[], opts?: { freeDrive?: boolean }) {
     this.cleanup();
+    this.freeDrive = !!opts?.freeDrive;
     // Recalculate size now that the container is visible (safety net)
     this.onResize();
     this.trackSpec = track;
@@ -797,8 +812,7 @@ export class GameEngine {
         velocity: new THREE.Vector3(),
         heading,
         angularVel: 0,
-        speed: 0,
-        lateralSpeed: 0,
+        spee,
         rpm: 0.2,
         gear: 1,
         nitro: 1,
@@ -925,6 +939,7 @@ export class GameEngine {
 
     if (this.state === 'countdown') {
       this.countdownTime -= dt;
+      this.updateCamera(dt);
       if (this.countdownTime <= 0) {
         this.state = 'racing';
         this.raceTime = 0;
@@ -1178,6 +1193,36 @@ export class GameEngine {
         if (steering) steering.rotation.z = -steer * 0.8;
       }
 
+      // Brake lights flare under braking; damaged lights die out
+      const tls = (car.mesh as any).tailLights as THREE.Mesh[] | undefined;
+      if (tls) {
+        tls.forEach((t, i) => {
+          const m = t.material as THREE.MeshStandardMaterial;
+          const dead = car.damage > 0.8 || (car.damage > 0.55 && i === 1);
+          m.emissiveIntensity = dead ? 0.03 : brake > 0.05 ? 3.2 : 0.9;
+        });
+      }
+
+      // Visible body damage: sagging panels, cracked glass, dulled paint
+      const dmgApplied = (car as any).dmgApplied ?? 0;
+      if (Math.abs(car.damage - dmgApplied) > 0.01) {
+        (car as any).dmgApplied = car.damage;
+        const dp = (car.mesh as any).damageParts;
+        if (dp) {
+          const d = car.damage;
+          dp.hood.rotation.z = -d * 0.06;
+          dp.trunk.rotation.z = d * 0.05;
+          dp.cabin.rotation.z = d * 0.025;
+          for (const g of dp.glass as THREE.Mesh[]) {
+            const gm = g.material as THREE.MeshStandardMaterial;
+            gm.color.setHex(d > 0.35 ? 0x1a2028 : 0x35506a);
+            gm.opacity = Math.min(0.95, 0.6 + d * 0.35);
+            gm.roughness = Math.min(0.7, 0.12 + d * 0.5);
+          }
+          dp.paint.color.copy(dp.baseColor).multiplyScalar(1 - d * 0.3);
+        }
+      }
+
       // Audio for player
       if (car.isPlayer) {
         audio.updateEngine(car.rpm, throttle, kmh);
@@ -1185,8 +1230,8 @@ export class GameEngine {
         audio.playNitro(car.nitroActive);
       }
 
-      // Finish detection
-      if (!car.finished && car.lap >= (this.trackSpec?.laps || 3)) {
+      // Finish detection (disabled in Free Drive)
+      if (!car.finished && !this.freeDrive && car.lap >= (this.trackSpec?.laps || 3)) {
         car.finished = true;
         car.finishTime = this.raceTime;
         this.finishedPosition++;
@@ -1342,6 +1387,28 @@ export class GameEngine {
     if (speed > cornerMaxSpeed) {
       throttle = 0;
       brake = Math.min(1, (speed - cornerMaxSpeed) / 30);
+    }
+
+    // Overtaking: spot slower cars ahead and pick the freer side
+    {
+      const fwdX = Math.sin(car.heading), fwdZ = Math.cos(car.heading);
+      for (const other of this.cars) {
+        if (other === car) continue;
+        const dx = other.position.x - car.position.x;
+        const dz = other.position.z - car.position.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > 16) continue;
+        const aheadDot = dx * fwdX + dz * fwdZ;
+        if (aheadDot < 2 || aheadDot > 16) continue; // must be ahead
+        const latRight = dx * fwdZ - dz * fwdX; // lateral offset (right +)
+        if (Math.abs(latRight) > 3.5) continue; // not in my corridor
+        const closing = car.speed - other.speed;
+        if (closing > 2) {
+          // Swerve to whichever side the other car is NOT blocking
+          steer = Math.max(-1, Math.min(1, steer + (latRight > 0 ? -0.85 : 0.85)));
+          if (closing > 10) throttle = Math.min(throttle, 0.6);
+        }
+      }
     }
 
     // Skill errors
@@ -1537,6 +1604,21 @@ export class GameEngine {
     const p = this.player;
     const forward = new THREE.Vector3(Math.sin(p.heading), 0, Math.cos(p.heading));
 
+    // Cinematic orbit around the car during the countdown
+    if (this.state === 'countdown') {
+      const total = Math.max(0, 3 - this.countdownTime);
+      const ang = p.heading - 0.85 + total * 0.5;
+      const radius = 10.5 - total * 1.3;
+      const side = p.position.clone().add(new THREE.Vector3(Math.sin(ang) * radius, 2.6 + total * 0.25, Math.cos(ang) * radius));
+      if (instant) this.camera.position.copy(side);
+      else this.camera.position.lerp(side, Math.min(1, dt * 4));
+      const lookAt = p.position.clone().add(forward.clone().multiplyScalar(3)).add(new THREE.Vector3(0, 0.9, 0));
+      this.camera.lookAt(lookAt);
+      this.camera.fov += (56 - this.camera.fov) * Math.min(1, dt * 3);
+      this.camera.updateProjectionMatrix();
+      return;
+    }
+
     if (this.cameraMode === 'chase') {
       const speed = Math.abs(p.speed);
       const desiredDist = 9 + speed * 0.01;
@@ -1607,7 +1689,7 @@ export class GameEngine {
       position,
       totalRacers: this.cars.length,
       lap: Math.min((this.trackSpec?.laps || 3), p.lap + 1),
-      totalLaps: this.trackSpec?.laps || 3,
+      totalLaps: this.freeDrive ? 0 : this.trackSpec?.laps || 3,
       nitro: p.nitro,
       damage: p.damage,
       driftScore: p.driftScoreAccum,

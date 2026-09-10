@@ -8,13 +8,17 @@ import {
   loadSave, writeSave, SaveData,
 } from './components/UI';
 
-type Screen = 'menu' | 'career' | 'quickrace' | 'garage' | 'settings' | 'controls' | 'credits' | 'race' | 'paused' | 'results';
+type Screen = 'menu' | 'career' | 'quickrace' | 'timetrial' | 'freedrive' | 'garage' | 'settings' | 'controls' | 'credits' | 'race' | 'paused' | 'results';
+
+type RaceMode = 'career' | 'quick' | 'timetrial' | 'freedrive';
 
 interface RaceConfig {
   track: TrackSpec;
   playerCar: CarSpec;
   aiSpecs: { spec: CarSpec; skill: number }[];
   careerIdx: number | null;
+  mode: RaceMode;
+  freeDrive: boolean;
 }
 
 function buildAIFleet(playerCar: CarSpec, count: number, level: number, save: SaveData): { spec: CarSpec; skill: number }[] {
@@ -126,7 +130,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
 
-  const startRace = useCallback((track: TrackSpec, car: CarSpec, careerIdx: number | null) => {
+  const startRace = useCallback((track: TrackSpec, car: CarSpec, careerIdx: number | null, mode: RaceMode, freeDrive = false) => {
     if (!containerRef.current) return;
     audio.init(); audio.resume();
     // cleanup old
@@ -139,6 +143,9 @@ export default function App() {
       },
       onHUD: (h) => setHud(h),
       onFinish: (r) => {
+        const prevBest = save.bestTimes[track.id];
+        const improved = careerIdx === null && (!prevBest || r.totalTime < prevBest);
+        setNewBest(improved);
         const rewardMoney = careerIdx !== null ? CAREER[careerIdx].reward : 500;
         const positionBonus = r.position === 1 ? 1.5 : r.position === 2 ? 1.2 : r.position === 3 ? 1.0 : 0.5;
         const driftBonus = Math.floor(r.driftScore * 0.1);
@@ -179,13 +186,15 @@ export default function App() {
       onShake: () => { /* handled via CSS by HUD */ },
     });
     engineRef.current = engine;
-    const aiSpecs = buildAIFleet(car, track.aiCount, careerIdx !== null ? CAREER[careerIdx].opponentLevel : 0.6, save);
-    setRaceConfig({ track, playerCar: car, aiSpecs, careerIdx });
+    const noAI = freeDrive || mode === 'timetrial';
+    const aiSpecs = noAI ? [] : buildAIFleet(car, track.aiCount, careerIdx !== null ? CAREER[careerIdx].opponentLevel : 0.6, save);
+    setRaceConfig({ track, playerCar: car, aiSpecs, careerIdx, mode, freeDrive });
     setHud(null);
     setResult(null);
+    setNewBest(false);
     setScreen('race');
     setCameraMode('chase');
-    engine.startRace(car, track, aiSpecs);
+    engine.startRace(car, track, aiSpecs, { freeDrive });
   }, [save]);
 
   const pauseRace = () => {
@@ -198,7 +207,7 @@ export default function App() {
   };
   const restartRace = () => {
     if (!raceConfig) return;
-    startRace(raceConfig.track, raceConfig.playerCar, raceConfig.careerIdx);
+    startRace(raceConfig.track, raceConfig.playerCar, raceConfig.careerIdx, raceConfig.mode, raceConfig.freeDrive);
   };
   const quitRace = () => {
     engineRef.current?.cleanup();
@@ -239,6 +248,8 @@ export default function App() {
           selectedCar={selectedCar}
           onPlay={() => setScreen('career')}
           onQuickRace={() => setScreen('quickrace')}
+          onTimeTrial={() => setScreen('timetrial')}
+          onFreeDrive={() => setScreen('freedrive')}
           onGarage={() => setScreen('garage')}
           onSettings={() => setScreen('settings')}
           onControls={() => setScreen('controls')}
@@ -252,7 +263,7 @@ export default function App() {
           onStart={(idx) => {
             const race = CAREER[idx];
             const track = TRACKS.find(t => t.id === race.trackId)!;
-            startRace(track, selectedCar, idx);
+            startRace(track, selectedCar, idx, 'career');
           }}
           onBack={() => setScreen('menu')}
           onOpenGarage={() => setScreen('garage')}
@@ -262,7 +273,27 @@ export default function App() {
         <QuickRaceScreen
           save={save}
           selectedCar={selectedCar}
-          onStart={(track) => startRace(track, selectedCar, null)}
+          onStart={(track) => startRace(track, selectedCar, null, 'quick')}
+          onBack={() => setScreen('menu')}
+          onOpenGarage={() => setScreen('garage')}
+        />
+      )}
+      {screen === 'timetrial' && (
+        <QuickRaceScreen
+          title="TIME TRIAL"
+          save={save}
+          selectedCar={selectedCar}
+          onStart={(track) => startRace(track, selectedCar, null, 'timetrial')}
+          onBack={() => setScreen('menu')}
+          onOpenGarage={() => setScreen('garage')}
+        />
+      )}
+      {screen === 'freedrive' && (
+        <QuickRaceScreen
+          title="FREE DRIVE"
+          save={save}
+          selectedCar={selectedCar}
+          onStart={(track) => startRace(track, selectedCar, null, 'freedrive', true)}
           onBack={() => setScreen('menu')}
           onOpenGarage={() => setScreen('garage')}
         />
@@ -321,12 +352,14 @@ export default function App() {
           reward={reward}
           careerIdx={raceConfig.careerIdx}
           newCar={newCarUnlock || undefined}
+          modeLabel={raceConfig.mode === 'career' ? 'CAREER RACE' : raceConfig.mode === 'timetrial' ? 'TIME TRIAL' : raceConfig.mode === 'freedrive' ? 'FREE DRIVE' : 'QUICK RACE'}
+          newBest={newBest}
           onNext={() => {
             if (raceConfig.careerIdx !== null && raceConfig.careerIdx + 1 < CAREER.length) {
               const nextIdx = raceConfig.careerIdx + 1;
               const nextRace = CAREER[nextIdx];
               const track = TRACKS.find(t => t.id === nextRace.trackId)!;
-              startRace(track, selectedCar, nextIdx);
+              startRace(track, selectedCar, nextIdx, 'career');
             } else {
               setScreen('menu');
             }

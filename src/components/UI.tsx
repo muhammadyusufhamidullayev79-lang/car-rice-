@@ -51,13 +51,15 @@ interface MainMenuProps {
   selectedCar: CarSpec;
   onPlay: () => void;
   onQuickRace: () => void;
+  onTimeTrial: () => void;
+  onFreeDrive: () => void;
   onGarage: () => void;
   onSettings: () => void;
   onControls: () => void;
   onCredits: () => void;
 }
 
-export const MainMenu: React.FC<MainMenuProps> = ({ selectedCar, onPlay, onQuickRace, onGarage, onSettings, onControls, onCredits }) => {
+export const MainMenu: React.FC<MainMenuProps> = ({ selectedCar, onPlay, onQuickRace, onTimeTrial, onFreeDrive, onGarage, onSettings, onControls, onCredits }) => {
   return (
     <div className="absolute inset-0 flex flex-col scanlines" style={{ background: 'linear-gradient(135deg, #0a0a14 0%, #1a0a1a 50%, #0a0a14 100%)' }}>
       <div className="absolute inset-0 vignette" />
@@ -70,6 +72,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({ selectedCar, onPlay, onQuick
           <div className="flex flex-col gap-2 max-w-xs">
             <button className="btn-race text-xl" onClick={onPlay}>▶ Play Career</button>
             <button className="btn-race" onClick={onQuickRace}>⚡ Quick Race</button>
+            <button className="btn-race" onClick={onTimeTrial}>⏱ Time Trial</button>
+            <button className="btn-race" onClick={onFreeDrive}>🛣 Free Drive</button>
             <button className="btn-race" onClick={onGarage}>🏁 Garage</button>
             <button className="btn-race" onClick={onSettings}>⚙ Settings</button>
             <button className="btn-race" onClick={onControls}>🎮 Controls</button>
@@ -235,16 +239,17 @@ interface QuickRaceProps {
   onStart: (track: TrackSpec) => void;
   onBack: () => void;
   onOpenGarage: () => void;
+  title?: string;
 }
 
-export const QuickRaceScreen: React.FC<QuickRaceProps> = ({ save, selectedCar, onStart, onBack, onOpenGarage }) => {
+export const QuickRaceScreen: React.FC<QuickRaceProps> = ({ save, selectedCar, onStart, onBack, onOpenGarage, title = 'QUICK RACE' }) => {
   return (
     <div className="absolute inset-0 flex flex-col" style={{ background: 'linear-gradient(135deg, #0a0a14, #0a1a2a)' }}>
       <div className="absolute inset-0 vignette pointer-events-none" />
       <div className="relative z-10 p-6 md:p-10 flex-1 overflow-auto">
         <div className="flex items-center justify-between mb-8">
           <button className="btn-secondary" onClick={onBack}>← Back</button>
-          <h2 className="text-3xl md:text-5xl font-black hud-font text-white title-glow">QUICK RACE</h2>
+          <h2 className="text-3xl md:text-5xl font-black hud-font text-white title-glow">{title}</h2>
           <button className="btn-secondary" onClick={onOpenGarage}>Garage →</button>
         </div>
         <div className="text-white/60 tracking-widest text-xs mb-4">CURRENT CAR: <span className="text-white font-bold">{selectedCar.name}</span></div>
@@ -538,7 +543,7 @@ export const RaceHUD: React.FC<HUDProps> = ({ hud, cameraMode, onPause, trackCur
         <div className="flex items-center gap-4">
           <button className="btn-secondary pointer-events-auto text-xs px-3 py-2" onClick={onPause}>☰ PAUSE</button>
           <div className="text-white/70 text-xs tracking-widest">LAP</div>
-          <div className="text-2xl font-black hud-font text-white">{Math.min(hud.lap, hud.totalLaps)}<span className="text-white/40 text-base">/{hud.totalLaps}</span></div>
+          <div className="text-2xl font-black hud-font text-white">{hud.totalLaps === 0 ? hud.lap : Math.min(hud.lap, hud.totalLaps)}<span className="text-white/40 text-base">/{hud.totalLaps === 0 ? '∞' : hud.totalLaps}</span></div>
         </div>
         <div className="text-center">
           <div className="text-white/50 text-xs tracking-widest">RACE TIME</div>
@@ -751,12 +756,14 @@ interface ResultsProps {
   reward: number;
   careerIdx: number | null;
   newCar?: CarSpec;
+  modeLabel?: string;
+  newBest?: boolean;
   onNext: () => void;
   onReplay: () => void;
   onGarage: () => void;
   onMenu: () => void;
 }
-export const ResultsScreen: React.FC<ResultsProps> = ({ result, reward, careerIdx, newCar, onNext, onReplay, onGarage, onMenu }) => {
+export const ResultsScreen: React.FC<ResultsProps> = ({ result, reward, careerIdx, newCar, modeLabel, newBest, onNext, onReplay, onGarage, onMenu }) => {
   const podium = result.position <= 3;
   const [name, setName] = useState('');
   const [saved, setSaved] = useState(false);
@@ -768,7 +775,8 @@ export const ResultsScreen: React.FC<ResultsProps> = ({ result, reward, careerId
           <div className="text-7xl font-black hud-font mb-2" style={{ color: podium ? '#ffae00' : '#fff' }}>
             {result.position}<span className="text-3xl text-white/40">{['st','nd','rd','th','th','th','th','th','th','th'][result.position-1] || 'th'}</span>
           </div>
-          <div className="text-white/60 tracking-widest text-sm">POSITION</div>
+          <div className="text-white/60 tracking-widest text-sm">POSITION{modeLabel ? ` — ${modeLabel}` : ''}</div>
+          {newBest && <div className="mt-3 inline-block px-4 py-1 bg-yellow-500/20 border border-yellow-400/60 text-yellow-300 text-xs tracking-widest font-bold">★ NEW BEST TIME! ★</div>}
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">

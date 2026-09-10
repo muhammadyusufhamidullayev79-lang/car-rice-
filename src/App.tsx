@@ -52,6 +52,7 @@ export default function App() {
   const [raceConfig, setRaceConfig] = useState<RaceConfig | null>(null);
   const [newCarUnlock, setNewCarUnlock] = useState<CarSpec | null>(null);
   const [reward, setReward] = useState(0);
+  const [newBest, setNewBest] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);

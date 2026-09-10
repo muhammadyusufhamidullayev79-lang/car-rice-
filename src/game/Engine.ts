@@ -812,7 +812,7 @@ export class GameEngine {
         velocity: new THREE.Vector3(),
         heading,
         angularVel: 0,
-        spee,
+        speed: 0,
         rpm: 0.2,
         gear: 1,
         nitro: 1,
